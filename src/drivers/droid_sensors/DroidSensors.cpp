@@ -21,6 +21,7 @@
 #include "DroidSensors.hpp"
 
 #include <drivers/drv_hrt.h>
+#include <parameters/param.h>
 #include <px4_platform_common/getopt.h>
 
 #include <math.h>
@@ -151,6 +152,29 @@ void DroidSensors::run()
 		PX4_ERR("no sensors enabled, exiting");
 		ASensorManager_destroyEventQueue(mgr, queue);
 		return;
+	}
+
+	// Adapt the estimator configuration to what this phone actually has.
+	// This runs before 'ekf2 start' in px4.config, so the params take
+	// effect for the estimator's whole lifetime.
+	{
+		const bool has_mag = ASensorManager_getDefaultSensor(mgr, ASENSOR_TYPE_MAGNETIC_FIELD) != nullptr;
+		const bool has_baro = ASensorManager_getDefaultSensor(mgr, ASENSOR_TYPE_PRESSURE) != nullptr;
+
+		int32_t mag_type = has_mag ? 0 : 5;   // 0 = automatic, 5 = none
+		param_set(param_find("EKF2_MAG_TYPE"), &mag_type);
+
+		if (!has_mag) {
+			PX4_WARN("no magnetometer: EKF runs mag-less, yaw will drift");
+		}
+
+		int32_t has_baro_i = has_baro ? 1 : 0;
+		param_set(param_find("SYS_HAS_BARO"), &has_baro_i);
+		param_set(param_find("EKF2_BARO_CTRL"), &has_baro_i);
+
+		if (!has_baro) {
+			PX4_INFO("no barometer: EKF baro fusion disabled");
+		}
 	}
 
 	while (!should_exit()) {
