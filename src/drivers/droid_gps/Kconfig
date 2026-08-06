@@ -1,0 +1,6 @@
+menuconfig DRIVERS_DROID_GPS
+	bool "droid_gps"
+	default n
+	---help---
+		GNSS bridge for Android: receives fixes from the Java
+		LocationManager layer over local UDP and publishes sensor_gps

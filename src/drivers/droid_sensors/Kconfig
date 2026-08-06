@@ -1,0 +1,6 @@
+menuconfig DRIVERS_DROID_SENSORS
+	bool "droid_sensors"
+	default n
+	---help---
+		Android sensor bridge: publishes the phone's IMU/mag/baro
+		(via the NDK ASensorManager API) as PX4 uORB sensor topics
