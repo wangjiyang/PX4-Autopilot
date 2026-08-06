@@ -72,8 +72,10 @@ private:
 	static constexpr uint32_t DEVICE_ID_MAG  = 197388;
 	static constexpr uint32_t DEVICE_ID_BARO = 6620428;
 
-	// target IMU sample interval in microseconds (250 Hz)
-	static constexpr int32_t IMU_INTERVAL_US = 4000;
+	// target IMU sample interval in microseconds: ask for the sensor's
+	// fastest rate (clamped to min_delay at enable time); the HAL may
+	// still deliver less (observed ~80 Hz on ovaltine's bmi26x)
+	static constexpr int32_t IMU_INTERVAL_US = 2500;
 
 	void handle_event(const ASensorEvent &ev);
 

@@ -1,0 +1,6 @@
+menuconfig DRIVERS_DROID_STATUS
+	bool "droid_status"
+	default n
+	---help---
+		Streams FC status to the hosting Android app's debug UI
+		over local UDP (127.0.0.1:14560)
