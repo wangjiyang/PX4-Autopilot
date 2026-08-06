@@ -38,13 +38,17 @@
 
 #include "sock_protocol.h"
 
+#include <cstdlib>
+
 namespace px4_daemon
 {
 
 std::string get_socket_path(int instance_id)
 {
 	// TODO: Use /var/run/px4/$instance/sock (or /var/run/user/$UID/... for non-root).
-	return "/tmp/px4-sock-" + std::to_string(instance_id);
+	// honor TMPDIR: Android has no writable /tmp
+	const char *tmpdir = getenv("TMPDIR");
+	return std::string(tmpdir ? tmpdir : "/tmp") + "/px4-sock-" + std::to_string(instance_id);
 }
 
 } // namespace px4_daemon

@@ -240,6 +240,13 @@ function(px4_os_add_flags)
 
 	add_compile_options($<$<COMPILE_LANGUAGE:C>:-Wbad-function-cast>)
 
+	if(ANDROID)
+		# PX4 uses C++ VLAs in several places; NDK clang 18+ warns about
+		# them (and PX4 builds with -Werror). Must come after the common
+		# warning flags so it is not re-enabled by -Wall.
+		add_compile_options(-Wno-vla-cxx-extension)
+	endif()
+
 endfunction()
 
 #=============================================================================

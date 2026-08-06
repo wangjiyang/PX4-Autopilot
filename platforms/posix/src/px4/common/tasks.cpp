@@ -297,7 +297,12 @@ int px4_task_delete(px4_task_t id)
 		pthread_exit(nullptr);
 
 	} else {
+#ifdef __ANDROID__
+		// bionic has no pthread_cancel; modules terminate via should_exit()
+		rv = -ENOSYS;
+#else
 		rv = pthread_cancel(pid);
+#endif
 	}
 
 	taskmap[id].isused = false;

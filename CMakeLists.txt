@@ -274,9 +274,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PX4_BINARY_DIR})
 # gold linker - use if available (posix only for now)
 if(${PX4_PLATFORM} STREQUAL "posix")
 	include(CMakeDependentOption)
+	# ANDROID: the NDK links with lld; the gold probe would pick up the
+	# host's /usr/bin/ld.gold and fail on aarch64 objects
 	CMAKE_DEPENDENT_OPTION(USE_LD_GOLD
 			"Use GNU gold linker" ON
-			"NOT WIN32;NOT APPLE" OFF
+			"NOT WIN32;NOT APPLE;NOT ANDROID" OFF
 	)
 
 	if(USE_LD_GOLD)

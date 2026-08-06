@@ -81,7 +81,14 @@
 
 #define MODULE_NAME "px4"
 
-static const char *LOCK_FILE_PATH = "/tmp/px4_lock";
+// honor TMPDIR: Android has no writable /tmp (the app sets TMPDIR to its
+// private files dir)
+static std::string tmp_dir()
+{
+	const char *tmpdir = getenv("TMPDIR");
+	return tmpdir ? tmpdir : "/tmp";
+}
+static const std::string LOCK_FILE_PATH = tmp_dir() + "/px4_lock";
 
 #ifndef PATH_MAX
 #define PATH_MAX 1024
@@ -375,7 +382,8 @@ int main(int argc, char **argv)
 
 		// delete lock
 		const std::string file_lock_path = std::string(LOCK_FILE_PATH) + '-' + std::to_string(instance);
-		int fd_flock = open(file_lock_path.c_str(), O_RDWR, 0666);
+		// no mode bits without O_CREAT (bionic fortify rejects at compile time)
+		int fd_flock = open(file_lock_path.c_str(), O_RDWR);
 
 		if (fd_flock >= 0) {
 			unlink(file_lock_path.c_str());
@@ -546,7 +554,12 @@ std::string get_absolute_binary_path(const std::string &argv0)
 int run_startup_script(const std::string &commands_file, const std::string &absolute_binary_path,
 		       int instance)
 {
+#ifdef __ANDROID__
+	// Android has no /bin/sh
+	std::string shell_command("/system/bin/sh ");
+#else
 	std::string shell_command("/bin/sh ");
+#endif
 
 	shell_command += commands_file + ' ' + std::to_string(instance);
 

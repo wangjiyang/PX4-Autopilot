@@ -323,6 +323,13 @@ WorkQueueManagerRun(int, char **)
 			pthread_t thread;
 			int ret_create = pthread_create(&thread, &attr, WorkQueueRunner, (void *)wq);
 
+			if (ret_create == EPERM) {
+				// not running as root / no RT capability (e.g. inside an
+				// Android app): retry with default scheduling, same as
+				// px4_task_spawn_cmd() does
+				ret_create = pthread_create(&thread, nullptr, WorkQueueRunner, (void *)wq);
+			}
+
 			if (ret_create == 0) {
 				PX4_DEBUG("starting: %s, priority: %d, stack: %zu bytes", wq->name, param.sched_priority, stacksize);
 

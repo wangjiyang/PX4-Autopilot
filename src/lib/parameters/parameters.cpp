@@ -811,7 +811,9 @@ int param_save_default(bool blocking)
 
 				if (res == PX4_OK) {
 					// reopen file to verify
-					int fd_verify = ::open(filename, O_RDONLY, PX4_O_MODE_666);
+					// no mode argument: O_RDONLY without O_CREAT must not pass mode
+					// bits (bionic fortify rejects it at compile time)
+					int fd_verify = ::open(filename, O_RDONLY);
 					res = param_verify(fd_verify) || lseek(fd_verify, 0, SEEK_SET) || param_verify(fd_verify);
 					::close(fd_verify);
 				}
@@ -851,7 +853,8 @@ int param_save_default(bool blocking)
 
 				} else {
 					// verify export
-					int fd_verify = ::open(param_backup_file, O_RDONLY, PX4_O_MODE_666);
+					// no mode bits without O_CREAT (bionic fortify rejects at compile time)
+					int fd_verify = ::open(param_backup_file, O_RDONLY);
 					param_verify(fd_verify);
 					::close(fd_verify);
 				}
