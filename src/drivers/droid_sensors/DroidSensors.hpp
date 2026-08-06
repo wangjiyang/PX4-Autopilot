@@ -80,10 +80,14 @@ private:
 	void handle_event(const ASensorEvent &ev);
 
 	/** map an Android sensor event timestamp (CLOCK_BOOTTIME ns) into the
-	 *  hrt time base; batched events keep their true sample spacing */
-	hrt_abstime map_timestamp(int64_t event_timestamp_ns);
+	 *  hrt time base; batched events keep their true sample spacing.
+	 *  Per-sensor state: some HALs interleave batches of different sensors
+	 *  out of order - a shared offset then maps timestamps backwards and
+	 *  vehicle_imu rejects them. slot: 0 accel, 1 gyro, 2 mag, 3 baro. */
+	hrt_abstime map_timestamp(int slot, int64_t event_timestamp_ns);
 
-	uint64_t _ts_offset_us{0};
+	uint64_t _ts_offset_us[4] {};
+	uint64_t _last_mapped_us[4] {};
 
 	PX4Accelerometer _px4_accel{DEVICE_ID_IMU};
 	PX4Gyroscope     _px4_gyro{DEVICE_ID_IMU};

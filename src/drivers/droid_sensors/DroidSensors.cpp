@@ -31,7 +31,7 @@ DroidSensors::DroidSensors()
 	_px4_accel.set_range(16.f * CONSTANTS_ONE_G);
 }
 
-hrt_abstime DroidSensors::map_timestamp(int64_t event_timestamp_ns)
+hrt_abstime DroidSensors::map_timestamp(int slot, int64_t event_timestamp_ns)
 {
 	// ASensorEvent.timestamp is CLOCK_BOOTTIME in ns; hrt is CLOCK_MONOTONIC.
 	// Several samples arrive per looper wakeup - stamping them all with
@@ -40,18 +40,47 @@ hrt_abstime DroidSensors::map_timestamp(int64_t event_timestamp_ns)
 	// (re)estimate the clock offset when it drifts (e.g. after a suspend).
 	const uint64_t ev_us = (uint64_t)(event_timestamp_ns / 1000);
 	const uint64_t now = hrt_absolute_time();
-	const int64_t mapped_err = (int64_t)(ev_us + _ts_offset_us) - (int64_t)now;
+	const int64_t mapped_err = (int64_t)(ev_us + _ts_offset_us[slot]) - (int64_t)now;
 
-	if (_ts_offset_us == 0 || mapped_err > 0 || mapped_err < -50000) {
-		_ts_offset_us = now - ev_us;
+	if (_ts_offset_us[slot] == 0 || mapped_err > 0 || mapped_err < -50000) {
+		_ts_offset_us[slot] = now - ev_us;
 	}
 
-	return ev_us + _ts_offset_us;
+	const uint64_t mapped = ev_us + _ts_offset_us[slot];
+
+	// Some HALs deliver out-of-order batches. Downstream (vehicle_imu)
+	// integrates delta_velocity/dt, so squeezing timestamps to stay
+	// monotonic corrupts the integration - drop such samples instead.
+	if (mapped <= _last_mapped_us[slot]) {
+		return 0;
+	}
+
+	_last_mapped_us[slot] = mapped;
+	return mapped;
 }
 
 void DroidSensors::handle_event(const ASensorEvent &ev)
 {
-	const hrt_abstime now = map_timestamp(ev.timestamp);
+	int slot;
+
+	switch (ev.type) {
+	case ASENSOR_TYPE_ACCELEROMETER: slot = 0; break;
+
+	case ASENSOR_TYPE_GYROSCOPE: slot = 1; break;
+
+	case ASENSOR_TYPE_MAGNETIC_FIELD: slot = 2; break;
+
+	case ASENSOR_TYPE_PRESSURE: slot = 3; break;
+
+	default: return;
+	}
+
+	const hrt_abstime now = map_timestamp(slot, ev.timestamp);
+
+	if (now == 0) {
+		// out-of-order sample dropped
+		return;
+	}
 
 	switch (ev.type) {
 	case ASENSOR_TYPE_ACCELEROMETER:
