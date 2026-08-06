@@ -23,8 +23,9 @@
  *
  * Debug/status telemetry for the hosting Android app: periodically packs
  * the flight controller's key state (attitude, rates, sensor sample rates,
- * GPS, health flags) into a fixed 112-byte little-endian struct and sends
- * it to local UDP 127.0.0.1:14560, where the app's debug UI renders it.
+ * GPS, health flags, control outputs) into a fixed 144-byte little-endian
+ * struct (v2) sent to local UDP 127.0.0.1:14560, where the app's debug UI
+ * renders it.
  *
  * Layout must byte-for-byte match the Status class in MainActivity.java.
  */
@@ -38,6 +39,7 @@
 #include <matrix/math.hpp>
 
 #include <uORB/Subscription.hpp>
+#include <uORB/topics/actuator_motors.h>
 #include <uORB/topics/sensor_accel.h>
 #include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/sensor_gyro.h>
@@ -45,6 +47,8 @@
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/vehicle_thrust_setpoint.h>
+#include <uORB/topics/vehicle_torque_setpoint.h>
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -86,10 +90,14 @@ struct droid_status_pkt {
 	uint8_t  nav_state;       // 108
 	uint8_t  arming_state;    // 109
 	uint16_t reserved;        // 110
+	// --- version 2: control chain outputs (gimbal/motor demo) ---
+	float    torque_sp[3];    // 112 normalized torque setpoint (roll/pitch/yaw)
+	float    thrust_sp;       // 124 normalized collective thrust demand (0..1, up)
+	float    motor[4];        // 128 actuator_motors control[0..3], 0..1 (-1 = stopped)
 };
 #pragma pack(pop)
 
-static_assert(sizeof(droid_status_pkt) == 112, "droid_status_pkt must be 112 bytes");
+static_assert(sizeof(droid_status_pkt) == 144, "droid_status_pkt must be 144 bytes");
 
 class DroidStatus : public ModuleBase<DroidStatus>
 {
@@ -113,6 +121,9 @@ private:
 	uORB::Subscription _mag_sub{ORB_ID(sensor_mag)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
 	uORB::Subscription _vstatus_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _torque_sub{ORB_ID(vehicle_torque_setpoint)};
+	uORB::Subscription _thrust_sub{ORB_ID(vehicle_thrust_setpoint)};
+	uORB::Subscription _motors_sub{ORB_ID(actuator_motors)};
 
 	unsigned _sent{0};
 	unsigned _send_errors{0};
@@ -138,7 +149,11 @@ void DroidStatus::run()
 	droid_status_pkt pkt{};
 	pkt.magic0 = 'D';
 	pkt.magic1 = 'S';
-	pkt.version = 1;
+	pkt.version = 2;
+
+	for (int i = 0; i < 4; i++) {
+		pkt.motor[i] = -1.f; // stopped until actuator_motors says otherwise
+	}
 
 	// sample counters for rate estimation over a 1 s window
 	unsigned accel_cnt = 0, gyro_cnt = 0, mag_cnt = 0, gps_cnt = 0;
@@ -178,6 +193,30 @@ void DroidStatus::run()
 
 		_angvel_sub.update(&angvel);
 		_vstatus_sub.update(&vstatus);
+
+		vehicle_torque_setpoint_s torque;
+
+		if (_torque_sub.update(&torque)) {
+			pkt.torque_sp[0] = torque.xyz[0];
+			pkt.torque_sp[1] = torque.xyz[1];
+			pkt.torque_sp[2] = torque.xyz[2];
+		}
+
+		vehicle_thrust_setpoint_s thrust;
+
+		if (_thrust_sub.update(&thrust)) {
+			// NED body frame: hover thrust points up = -Z
+			pkt.thrust_sp = -thrust.xyz[2];
+		}
+
+		actuator_motors_s motors;
+
+		if (_motors_sub.update(&motors)) {
+			for (int i = 0; i < 4; i++) {
+				// NaN = motor stopped (disarmed) - report as -1
+				pkt.motor[i] = PX4_ISFINITE(motors.control[i]) ? motors.control[i] : -1.f;
+			}
+		}
 
 		if (iter % 5 != 0) {
 			continue;

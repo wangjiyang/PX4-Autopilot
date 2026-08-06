@@ -1,0 +1,6 @@
+menuconfig DRIVERS_DROID_RC
+	bool "droid_rc"
+	default n
+	---help---
+		Synthetic centered-stick pilot input for the phone demo
+		(no RC receiver on a phone)
