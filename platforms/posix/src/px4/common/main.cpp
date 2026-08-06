@@ -130,6 +130,13 @@ int SITL_MAIN(int argc, char **argv)
 int main(int argc, char **argv)
 #endif
 {
+#ifdef __ANDROID__
+	// stdout is consumed through a pipe by the hosting app's log pump;
+	// keep it line-buffered so startup output reaches logcat in time
+	setvbuf(stdout, nullptr, _IOLBF, 0);
+	setvbuf(stderr, nullptr, _IONBF, 0);
+#endif
+
 	bool is_client = false;
 	bool pxh_off = false;
 	bool server_is_running = false;
