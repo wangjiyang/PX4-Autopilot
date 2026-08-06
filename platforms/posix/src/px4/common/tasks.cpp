@@ -298,8 +298,11 @@ int px4_task_delete(px4_task_t id)
 
 	} else {
 #ifdef __ANDROID__
-		// bionic has no pthread_cancel; modules terminate via should_exit()
-		rv = -ENOSYS;
+		// bionic has no pthread_cancel; modules terminate via should_exit().
+		// Keep the slot marked used - the thread is still running and the
+		// slot must not be handed to a new task.
+		pthread_mutex_unlock(&task_mutex);
+		return -ENOSYS;
 #else
 		rv = pthread_cancel(pid);
 #endif

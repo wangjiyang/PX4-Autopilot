@@ -326,8 +326,12 @@ WorkQueueManagerRun(int, char **)
 			if (ret_create == EPERM) {
 				// not running as root / no RT capability (e.g. inside an
 				// Android app): retry with default scheduling, same as
-				// px4_task_spawn_cmd() does
-				ret_create = pthread_create(&thread, nullptr, WorkQueueRunner, (void *)wq);
+				// px4_task_spawn_cmd() does. Keep the attr (stack size!),
+				// only drop the RT policy.
+				pthread_attr_setschedpolicy(&attr, SCHED_OTHER);
+				sched_param param_other{};
+				pthread_attr_setschedparam(&attr, &param_other);
+				ret_create = pthread_create(&thread, &attr, WorkQueueRunner, (void *)wq);
 			}
 
 			if (ret_create == 0) {

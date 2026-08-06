@@ -64,9 +64,11 @@ struct droid_gps_pkt {
 	uint8_t  fix_type;         // 60
 	uint8_t  satellites_used;  // 61
 	uint8_t  vel_ned_valid;    // 62
-	uint8_t  pad;              // 63
+	uint8_t  magic;            // 63 - must be DROID_GPS_MAGIC
 };
 #pragma pack(pop)
+
+static constexpr uint8_t DROID_GPS_MAGIC = 0x73;
 
 static_assert(sizeof(droid_gps_pkt) == 64, "droid_gps_pkt must be 64 bytes");
 
@@ -130,15 +132,36 @@ void DroidGps::run()
 
 	while (!should_exit()) {
 		droid_gps_pkt pkt;
-		ssize_t n = recv(_fd, &pkt, sizeof(pkt), 0);
+		// MSG_TRUNC: report the real datagram size so oversized packets
+		// are rejected too (plain recv() would return the truncated 64)
+		ssize_t n = recv(_fd, &pkt, sizeof(pkt), MSG_TRUNC);
 
 		if (n < 0) {
-			// EAGAIN: recv timeout, loop to re-check should_exit()
-			continue;
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+				// recv timeout: loop to re-check should_exit()
+				continue;
+			}
+
+			PX4_ERR("recv failed: %s", strerror(errno));
+			break;
 		}
 
 		if (n != sizeof(pkt)) {
-			PX4_WARN("short packet: %zd bytes", n);
+			PX4_WARN("bad packet size: %zd bytes", n);
+			continue;
+		}
+
+		// basic input validation: anything on this UDP port is untrusted
+		if (pkt.magic != DROID_GPS_MAGIC
+		    || !PX4_ISFINITE(pkt.lat_deg) || pkt.lat_deg < -90.0 || pkt.lat_deg > 90.0
+		    || !PX4_ISFINITE(pkt.lon_deg) || pkt.lon_deg < -180.0 || pkt.lon_deg > 180.0
+		    || !PX4_ISFINITE(pkt.alt_msl_m) || fabs(pkt.alt_msl_m) > 100000.0
+		    || !PX4_ISFINITE(pkt.eph) || !PX4_ISFINITE(pkt.epv)
+		    || !PX4_ISFINITE(pkt.s_variance_m_s)
+		    || !PX4_ISFINITE(pkt.vel_n_m_s) || !PX4_ISFINITE(pkt.vel_e_m_s)
+		    || !PX4_ISFINITE(pkt.vel_d_m_s) || !PX4_ISFINITE(pkt.cog_rad)
+		    || pkt.fix_type > 8) {
+			PX4_WARN("rejecting invalid packet");
 			continue;
 		}
 

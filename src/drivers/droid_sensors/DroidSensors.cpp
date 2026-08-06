@@ -30,9 +30,27 @@ DroidSensors::DroidSensors()
 	_px4_accel.set_range(16.f * CONSTANTS_ONE_G);
 }
 
+hrt_abstime DroidSensors::map_timestamp(int64_t event_timestamp_ns)
+{
+	// ASensorEvent.timestamp is CLOCK_BOOTTIME in ns; hrt is CLOCK_MONOTONIC.
+	// Several samples arrive per looper wakeup - stamping them all with
+	// hrt_absolute_time() would collapse dt to ~0 and corrupt the gyro
+	// integration downstream. Instead keep the event spacing and only
+	// (re)estimate the clock offset when it drifts (e.g. after a suspend).
+	const uint64_t ev_us = (uint64_t)(event_timestamp_ns / 1000);
+	const uint64_t now = hrt_absolute_time();
+	const int64_t mapped_err = (int64_t)(ev_us + _ts_offset_us) - (int64_t)now;
+
+	if (_ts_offset_us == 0 || mapped_err > 0 || mapped_err < -50000) {
+		_ts_offset_us = now - ev_us;
+	}
+
+	return ev_us + _ts_offset_us;
+}
+
 void DroidSensors::handle_event(const ASensorEvent &ev)
 {
-	const hrt_abstime now = hrt_absolute_time();
+	const hrt_abstime now = map_timestamp(ev.timestamp);
 
 	switch (ev.type) {
 	case ASENSOR_TYPE_ACCELEROMETER:

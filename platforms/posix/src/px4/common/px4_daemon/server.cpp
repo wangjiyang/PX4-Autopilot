@@ -208,19 +208,26 @@ Server::_server_main()
 			if (poll_fds[i].revents) {
 				--n_ready;
 				auto thread = _fd_to_thread.find(poll_fds[i].fd);
+				bool handler_still_running = false;
 
 				if (thread != _fd_to_thread.end()) {
 #ifndef __ANDROID__
 					// Thread is still running, so we cancel it.
 					// TODO: use a more graceful exit method to avoid resource leaks
 					pthread_cancel(thread->second);
+#else
+					// bionic has no pthread_cancel: the detached handler thread
+					// exits on its own when the command completes. It may still
+					// write to the FILE*, so leak it here (rare interactive
+					// hangup) instead of a use-after-free.
+					handler_still_running = true;
 #endif
-					// bionic has no pthread_cancel: the detached client handler
-					// thread exits on its own when the command completes
 					_fd_to_thread.erase(thread);
 				}
 
-				fclose(stdouts[i - 1]);
+				if (!handler_still_running) {
+					fclose(stdouts[i - 1]);
+				}
 				stdouts.erase(stdouts.begin() + i - 1);
 				poll_fds.erase(poll_fds.begin() + i);
 
