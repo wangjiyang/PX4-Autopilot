@@ -37,6 +37,7 @@
 #include <px4_platform_common/posix.h>
 
 #include <drivers/drv_hrt.h>
+#include <string.h>
 #include <uORB/Publication.hpp>
 #include <uORB/topics/manual_control_setpoint.h>
 
@@ -55,14 +56,40 @@ public:
 	int print_status() override;
 
 private:
+	static constexpr float LAND_RAMP_S = 5.f; // throttle mid -> min
+
 	uORB::Publication<manual_control_setpoint_s> _manual_pub{ORB_ID(manual_control_setpoint)};
 	unsigned _published{0};
+
+	// "landing profile": ramp the virtual throttle stick down (real AUTO_LAND
+	// needs a height estimate the phone doesn't have indoors)
+	volatile bool _land_requested{false};
+	hrt_abstime _land_start{0};
 };
 
 void DroidRc::run()
 {
 	while (!should_exit()) {
 		px4_usleep(40000); // 25 Hz
+
+		float throttle = 0.f; // mid stick = ~50% thrust in manual mode
+
+		if (_land_requested) {
+			if (_land_start == 0) {
+				_land_start = hrt_absolute_time();
+			}
+
+			float t = (hrt_absolute_time() - _land_start) / (LAND_RAMP_S * 1e6f);
+
+			if (t > 1.f) {
+				t = 1.f;
+			}
+
+			throttle = -t; // ramp mid (0) -> min (-1)
+
+		} else {
+			_land_start = 0;
+		}
 
 		manual_control_setpoint_s msp{};
 		msp.timestamp_sample = hrt_absolute_time();
@@ -71,7 +98,7 @@ void DroidRc::run()
 		msp.roll = 0.f;
 		msp.pitch = 0.f;
 		msp.yaw = 0.f;
-		msp.throttle = 0.f; // mid stick = ~50% thrust in manual mode
+		msp.throttle = throttle;
 		msp.sticks_moving = false;
 		msp.timestamp = hrt_absolute_time();
 
@@ -110,6 +137,20 @@ DroidRc *DroidRc::instantiate(int argc, char *argv[])
 
 int DroidRc::custom_command(int argc, char *argv[])
 {
+	if (argc > 0 && is_running()) {
+		if (!strcmp(argv[0], "land")) {
+			get_instance()->_land_requested = true;
+			PX4_INFO("landing profile: throttle ramping down over %.0f s", (double)LAND_RAMP_S);
+			return 0;
+		}
+
+		if (!strcmp(argv[0], "hover")) {
+			get_instance()->_land_requested = false;
+			PX4_INFO("throttle back to hover (mid stick)");
+			return 0;
+		}
+	}
+
 	return print_usage("unknown command");
 }
 
@@ -129,6 +170,8 @@ level-attitude demand, mid throttle.
 
 	PRINT_MODULE_USAGE_NAME("droid_rc", "driver");
 	PRINT_MODULE_USAGE_COMMAND("start");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("land", "ramp virtual throttle to minimum (landing profile)");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("hover", "virtual throttle back to mid stick");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;
