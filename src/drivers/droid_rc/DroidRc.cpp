@@ -42,11 +42,19 @@
 #include <px4_platform_common/posix.h>
 
 #include <drivers/drv_hrt.h>
+#include <lib/geo/geo.h>
 #include <math.h>
+#include <matrix/math.hpp>
+#include <stdlib.h>
 #include <string.h>
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/manual_control_setpoint.h>
+#include <uORB/topics/orbit_status.h>
+#include <uORB/topics/vehicle_attitude.h>
+#include <uORB/topics/vehicle_command.h>
+#include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_status.h>
 
 class DroidRc : public ModuleBase<DroidRc>
 {
@@ -216,6 +224,66 @@ int DroidRc::custom_command(int argc, char *argv[])
 			PX4_INFO("throttle back to hover (mid stick)");
 			return 0;
 		}
+
+		// orbit [radius_m] [speed_mps]: circle a point <radius> ahead of the
+		// nose, front locked to the circle center (the "orbit a building
+		// with the camera on it" demo). Real FlightTaskOrbit does the flying.
+		if (!strcmp(argv[0], "orbit")) {
+			const float radius = (argc > 1) ? atof(argv[1]) : 8.f;
+			const float speed = (argc > 2) ? atof(argv[2]) : 2.f;
+
+			uORB::Subscription lpos_sub{ORB_ID(vehicle_local_position)};
+			vehicle_local_position_s lpos{};
+
+			if (!lpos_sub.copy(&lpos) || !lpos.xy_valid || !lpos.xy_global) {
+				PX4_ERR("orbit needs a valid global local-position reference");
+				return 1;
+			}
+
+			uORB::Subscription att_sub{ORB_ID(vehicle_attitude)};
+			vehicle_attitude_s att{};
+
+			if (!att_sub.copy(&att)) {
+				PX4_ERR("orbit: no attitude");
+				return 1;
+			}
+
+			const float yaw = matrix::Eulerf(matrix::Quatf(att.q)).psi();
+			const float center_n = lpos.x + radius * cosf(yaw);
+			const float center_e = lpos.y + radius * sinf(yaw);
+
+			MapProjection proj(lpos.ref_lat, lpos.ref_lon);
+			double lat = 0.0, lon = 0.0;
+			proj.reproject(center_n, center_e, lat, lon);
+
+			uORB::Subscription vstatus_sub{ORB_ID(vehicle_status)};
+			vehicle_status_s vstatus{};
+			vstatus_sub.copy(&vstatus);
+
+			vehicle_command_s cmd{};
+			cmd.command = vehicle_command_s::VEHICLE_CMD_DO_ORBIT;
+			cmd.param1 = radius;
+			cmd.param2 = speed;
+			cmd.param3 = orbit_status_s::ORBIT_YAW_BEHAVIOUR_HOLD_FRONT_TO_CIRCLE_CENTER;
+			cmd.param4 = NAN;
+			cmd.param5 = lat;
+			cmd.param6 = lon;
+			cmd.param7 = lpos.ref_alt - lpos.z; // hold current altitude (AMSL)
+			cmd.target_system = vstatus.system_id;
+			cmd.target_component = vstatus.component_id;
+			cmd.source_system = vstatus.system_id;
+			cmd.source_component = vstatus.component_id;
+			cmd.from_external = false;
+			cmd.timestamp = hrt_absolute_time();
+
+			uORB::Publication<vehicle_command_s> cmd_pub{ORB_ID(vehicle_command)};
+			cmd_pub.publish(cmd);
+
+			PX4_INFO("orbit: center %.1fm ahead (N %.1f E %.1f), r=%.1fm v=%.1fm/s",
+				 (double)radius, (double)center_n, (double)center_e,
+				 (double)radius, (double)speed);
+			return 0;
+		}
 	}
 
 	return print_usage("unknown command");
@@ -239,6 +307,7 @@ level-attitude demand, mid throttle.
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("land", "ramp virtual throttle to minimum (landing profile)");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("hover", "virtual throttle back to mid stick");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("orbit", "orbit a point ahead: orbit [radius_m] [speed_mps]");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;

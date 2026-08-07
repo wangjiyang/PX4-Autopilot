@@ -23,4 +23,6 @@ px4_add_module(
 	MAIN droid_rc
 	SRCS
 		DroidRc.cpp
+	DEPENDS
+		geo
 )

@@ -24,7 +24,7 @@
  * Debug/status telemetry for the hosting Android app: periodically packs
  * the flight controller's key state (attitude, rates, sensor sample rates,
  * GPS, health flags, control outputs, pre-flight validation metrics) into
- * a fixed 184-byte little-endian struct (v3) sent to local UDP
+ * a fixed 192-byte little-endian struct (v4) sent to local UDP
  * 127.0.0.1:14560, where the app's debug UI renders it.
  *
  * Layout must byte-for-byte match the Status class in MainActivity.java.
@@ -114,10 +114,13 @@ struct droid_status_pkt {
 	uint8_t  pad;             // 175
 	float    local_z_up;      // 176 height above local origin, up positive, m
 	float    vz_up;           // 180 vertical speed, up positive, m/s
+	// --- version 4: horizontal local position (orbit demo / path checks) ---
+	float    local_x;         // 184 NED north, m
+	float    local_y;         // 188 NED east, m
 };
 #pragma pack(pop)
 
-static_assert(sizeof(droid_status_pkt) == 184, "droid_status_pkt must be 184 bytes");
+static_assert(sizeof(droid_status_pkt) == 192, "droid_status_pkt must be 192 bytes");
 
 class DroidStatus : public ModuleBase<DroidStatus>
 {
@@ -172,7 +175,7 @@ void DroidStatus::run()
 	droid_status_pkt pkt{};
 	pkt.magic0 = 'D';
 	pkt.magic1 = 'S';
-	pkt.version = 3;
+	pkt.version = 4;
 	pkt.batt_pct = -1.f;
 
 	for (int i = 0; i < 4; i++) {
@@ -440,6 +443,8 @@ void DroidStatus::run()
 		pkt.lpos_valid = (last_lpos_time != 0) && (now - last_lpos_time < 1000000) && lpos.z_valid;
 		pkt.local_z_up = -lpos.z;
 		pkt.vz_up = -lpos.vz;
+		pkt.local_x = lpos.x;
+		pkt.local_y = lpos.y;
 		pkt.preflight_pass = vstatus.pre_flight_checks_pass;
 		pkt.nav_state = vstatus.nav_state;
 		pkt.arming_state = vstatus.arming_state;
