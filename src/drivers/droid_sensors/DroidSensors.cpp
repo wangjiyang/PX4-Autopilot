@@ -206,10 +206,12 @@ void DroidSensors::run()
 		const bool has_mag = ASensorManager_getDefaultSensor(mgr, ASENSOR_TYPE_MAGNETIC_FIELD) != nullptr;
 		const bool has_baro = ASensorManager_getDefaultSensor(mgr, ASENSOR_TYPE_PRESSURE) != nullptr;
 
-		int32_t mag_type = has_mag ? 0 : 5;   // 0 = automatic, 5 = none
-		param_set(param_find("EKF2_MAG_TYPE"), &mag_type);
-
+		// only force mag-less mode when the hardware is missing; when a mag
+		// exists the choice is left to px4.config (indoor demos disable mag
+		// fusion anyway - disturbed fields cause visible EKF yaw resets)
 		if (!has_mag) {
+			int32_t mag_type = 5; // none
+			param_set(param_find("EKF2_MAG_TYPE"), &mag_type);
 			PX4_WARN("no magnetometer: EKF runs mag-less, yaw will drift");
 		}
 
