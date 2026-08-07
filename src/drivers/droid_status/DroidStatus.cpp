@@ -37,6 +37,7 @@
 
 #include <drivers/drv_hrt.h>
 #include <matrix/math.hpp>
+#include <parameters/param.h>
 
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/actuator_motors.h>
@@ -184,6 +185,10 @@ void DroidStatus::run()
 	hrt_abstime window_start = task_start;
 	hrt_abstime last_att_time = 0;
 	hrt_abstime last_stall_report = 0;
+
+	int32_t sys_hitl = 0;
+	param_get(param_find("SYS_HITL"), &sys_hitl);
+	const bool hitl_mode = sys_hitl > 0;
 	hrt_abstime last_manual_time = 0;
 	hrt_abstime last_lpos_time = 0;
 	uint8_t last_manual_source = 0;
@@ -398,15 +403,23 @@ void DroidStatus::run()
 		// pipeline (vehicle_attitude) stopped = the intermittent wq
 		// starvation seen on Android. In flight this is fatal - report it
 		// loudly so the hosting service can restart the daemon.
+		// In SIH (SYS_HITL=2) the IMU itself is simulated in-process, so a
+		// dead gyro stream is also unambiguously a stall - a real phone's
+		// sensors can legitimately stop (screen off on stock ROMs), the
+		// simulator's cannot.
 		{
-			const bool gyro_alive = pkt.gyro_rate_hz > 100.f;
-			const bool att_dead = (now - task_start > 20 * 1000000UL)
+			const bool grace_over = now - task_start > 20 * 1000000UL;
+			const bool att_dead = grace_over
 					      && (last_att_time == 0 || now - last_att_time > 3000000);
+			const bool gyro_alive = pkt.gyro_rate_hz > 100.f;
+			const bool sih_imu_dead = hitl_mode && grace_over && pkt.gyro_rate_hz < 1.f;
 
-			if (gyro_alive && att_dead && (now - last_stall_report > 30 * 1000000UL)) {
-				PX4_ERR("control pipeline stalled: gyro %.0f Hz but attitude %s",
+			if (((gyro_alive && att_dead) || sih_imu_dead)
+			    && (now - last_stall_report > 30 * 1000000UL)) {
+				PX4_ERR("control pipeline stalled: gyro %.0f Hz, attitude %s%s",
 					(double)pkt.gyro_rate_hz,
-					last_att_time == 0 ? "never published" : "stopped");
+					last_att_time == 0 ? "never published" : "stopped",
+					sih_imu_dead ? " (SIH sim IMU dead)" : "");
 				last_stall_report = now;
 			}
 		}

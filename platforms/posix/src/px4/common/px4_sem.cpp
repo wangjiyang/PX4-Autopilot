@@ -55,16 +55,20 @@ int px4_sem_init(px4_sem_t *s, int pshared, unsigned value)
 	// We do not used the process shared arg
 	(void)pshared;
 	s->value = value;
-	pthread_cond_init(&(s->wait), nullptr);
+	s->wakeups = 0;
 	pthread_mutex_init(&(s->lock), nullptr);
 
-#if !defined(__PX4_DARWIN)
-	// We want to use CLOCK_MONOTONIC if possible but we can't on macOS
-	// because it's not available.
+#if defined(__PX4_DARWIN)
+	// CLOCK_MONOTONIC condattr is not available on macOS
+	pthread_cond_init(&(s->wait), nullptr);
+#else
+	// initialize the condvar exactly once (initializing it twice, as this
+	// used to do, is undefined behavior)
 	pthread_condattr_t attr;
 	pthread_condattr_init(&attr);
 	pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
 	pthread_cond_init(&(s->wait), &attr);
+	pthread_condattr_destroy(&attr);
 #endif
 
 	return 0;
@@ -86,7 +90,23 @@ int px4_sem_wait(px4_sem_t *s)
 	s->value--;
 
 	if (s->value < 0) {
-		ret = pthread_cond_wait(&(s->wait), &(s->lock));
+		// pthread_cond_wait can wake spuriously; this semaphore's paired
+		// value/signal accounting assumes exactly one wakeup per post, so a
+		// spurious return here would let two threads through a
+		// sem-as-mutex critical section (work_lock, hrt lock, ...) at once
+		// - seen in the wild as intermittent work-queue corruption. Only
+		// proceed after consuming a real wakeup token.
+		do {
+			ret = pthread_cond_wait(&(s->wait), &(s->lock));
+		} while (ret == 0 && s->wakeups == 0);
+
+		if (ret == 0) {
+			s->wakeups--;
+
+		} else {
+			// wait failed: retract this thread's claim on the count
+			s->value++;
+		}
 
 	} else {
 		ret = 0;
@@ -134,7 +154,25 @@ int px4_sem_timedwait(px4_sem_t *s, const struct timespec *abstime)
 	errno = 0;
 
 	if (s->value < 0) {
-		ret = px4_pthread_cond_timedwait(&(s->wait), &(s->lock), abstime);
+		// same spurious-wakeup guard as px4_sem_wait
+		do {
+			ret = px4_pthread_cond_timedwait(&(s->wait), &(s->lock), abstime);
+		} while (ret == 0 && s->wakeups == 0);
+
+		if (ret == 0) {
+			s->wakeups--;
+
+		} else if (s->wakeups > 0) {
+			// a post raced with the timeout: consume it and succeed
+			s->wakeups--;
+			ret = 0;
+
+		} else {
+			// timed out / failed with no post: retract this thread's claim
+			// (the old code leaked the decrement on every timeout, skewing
+			// the count forever)
+			s->value++;
+		}
 
 	} else {
 		ret = 0;
@@ -171,6 +209,7 @@ int px4_sem_post(px4_sem_t *s)
 	s->value++;
 
 	if (s->value <= 0) {
+		s->wakeups++;
 		ret = pthread_cond_signal(&(s->wait));
 
 	} else {

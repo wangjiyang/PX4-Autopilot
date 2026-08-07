@@ -58,6 +58,10 @@ typedef struct {
 	pthread_mutex_t lock;
 	pthread_cond_t wait;
 	int value;
+	// outstanding wakeup tokens: pthread_cond_wait may wake spuriously, and
+	// this semaphore's negative-value accounting assumes exactly one wakeup
+	// per post. Waiters only proceed after consuming a token.
+	unsigned wakeups;
 } px4_sem_t;
 
 __EXPORT int		px4_sem_init(px4_sem_t *s, int pshared, unsigned value);
