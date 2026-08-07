@@ -21,14 +21,19 @@
 /**
  * @file DroidRc.cpp
  *
- * Synthetic pilot input for the phone demo: publishes a centered-stick
- * manual_control_setpoint at 25 Hz (roll/pitch/yaw = 0, throttle = mid).
- * In MANUAL/STABILIZED mode this makes the attitude controller demand a
- * level attitude, so tilting the phone produces visible corrective motor
- * commands - which is exactly what the gimbal/motor demo UI shows.
+ * Pilot input for the phone: publishes manual_control_setpoint at 25 Hz.
  *
- * The phone has no RC receiver and no joystick; without this module the
- * mc control stack would sit idle for lack of pilot input.
+ * Two sources, auto-selected:
+ *  - external: a GCS joystick (QGroundControl "virtual joystick" sends
+ *    MAVLink MANUAL_CONTROL; mavlink_receiver publishes it on
+ *    manual_control_input). Fresh external samples are passed through
+ *    unchanged, so a phone + QGC is a complete pilot loop.
+ *  - internal fallback: centered sticks (roll/pitch/yaw = 0, throttle mid),
+ *    tagged SOURCE_RC so the UI can tell the two apart. In MANUAL mode this
+ *    demands a level attitude - the bench gimbal/motor demo.
+ *
+ * The "land" command (virtual throttle ramp) overrides the throttle of
+ * either source: the landing button must always win.
  */
 
 #include <px4_platform_common/px4_config.h>
@@ -37,8 +42,10 @@
 #include <px4_platform_common/posix.h>
 
 #include <drivers/drv_hrt.h>
+#include <math.h>
 #include <string.h>
 #include <uORB/Publication.hpp>
+#include <uORB/Subscription.hpp>
 #include <uORB/topics/manual_control_setpoint.h>
 
 class DroidRc : public ModuleBase<DroidRc>
@@ -56,10 +63,25 @@ public:
 	int print_status() override;
 
 private:
-	static constexpr float LAND_RAMP_S = 5.f; // throttle mid -> min
+	static constexpr float LAND_RAMP_S = 5.f;          // throttle mid -> min
+	static constexpr uint64_t EXT_TIMEOUT_US = 800000; // external joystick considered lost
 
 	uORB::Publication<manual_control_setpoint_s> _manual_pub{ORB_ID(manual_control_setpoint)};
+	// external pilot input (QGC virtual joystick via mavlink_receiver)
+	uORB::Subscription _input_subs[3] {
+		{ORB_ID(manual_control_input), 0},
+		{ORB_ID(manual_control_input), 1},
+		{ORB_ID(manual_control_input), 2},
+	};
+	manual_control_setpoint_s _ext{};
+	bool _ext_seen{false};
+	// sticks_moving is normally computed by the manual_control module (not
+	// running here); commander's COM_RC_OVERRIDE stick-takeover from auto
+	// modes depends on it, so derive it from consecutive external samples
+	manual_control_setpoint_s _ext_prev{};
+	hrt_abstime _last_stick_move{0};
 	unsigned _published{0};
+	unsigned _published_ext{0};
 
 	// "landing profile": ramp the virtual throttle stick down (real AUTO_LAND
 	// needs a height estimate the phone doesn't have indoors)
@@ -72,44 +94,89 @@ void DroidRc::run()
 	while (!should_exit()) {
 		px4_usleep(40000); // 25 Hz
 
-		float throttle = 0.f; // mid stick = ~50% thrust in manual mode
+		const hrt_abstime now = hrt_absolute_time();
+
+		// latest external joystick sample, if any
+		for (auto &sub : _input_subs) {
+			manual_control_setpoint_s in;
+
+			while (sub.update(&in)) {
+				if (in.valid && in.data_source != manual_control_setpoint_s::SOURCE_RC
+				    && in.timestamp_sample > _ext.timestamp_sample) {
+					const float delta = fabsf(in.roll - _ext_prev.roll)
+							    + fabsf(in.pitch - _ext_prev.pitch)
+							    + fabsf(in.yaw - _ext_prev.yaw)
+							    + fabsf(in.throttle - _ext_prev.throttle);
+
+					if (_ext_seen && delta > 0.02f) {
+						_last_stick_move = in.timestamp_sample;
+					}
+
+					_ext_prev = in;
+					_ext = in;
+					_ext_seen = true;
+				}
+			}
+		}
+
+		const bool ext_fresh = _ext_seen && (now - _ext.timestamp_sample) < EXT_TIMEOUT_US;
+
+		manual_control_setpoint_s msp{};
+
+		if (ext_fresh) {
+			// pass the GCS joystick through (note: between GCS messages the
+			// last sample is re-published with fresh timestamps for up to
+			// EXT_TIMEOUT_US - a replay, indistinguishable from a held stick)
+			msp = _ext;
+			// hold "moving" ~500 ms past the last real movement (hysteresis
+			// like the upstream manual_control module)
+			msp.sticks_moving = (_last_stick_move != 0) && (now - _last_stick_move < 500000);
+
+		} else {
+			// centered-stick fallback, tagged SOURCE_RC so consumers can
+			// tell "internal hover demand" from a real joystick
+			msp.data_source = manual_control_setpoint_s::SOURCE_RC;
+			msp.roll = 0.f;
+			msp.pitch = 0.f;
+			msp.yaw = 0.f;
+			msp.throttle = 0.f; // mid stick = ~50% thrust in manual mode
+			msp.sticks_moving = false;
+		}
 
 		if (_land_requested) {
 			if (_land_start == 0) {
-				_land_start = hrt_absolute_time();
+				_land_start = now;
 			}
 
-			float t = (hrt_absolute_time() - _land_start) / (LAND_RAMP_S * 1e6f);
+			float t = (now - _land_start) / (LAND_RAMP_S * 1e6f);
 
 			if (t > 1.f) {
 				t = 1.f;
 			}
 
-			throttle = -t; // ramp mid (0) -> min (-1)
+			msp.throttle = -t; // ramp mid (0) -> min (-1), overrides any source
 
 		} else {
 			_land_start = 0;
 		}
 
-		manual_control_setpoint_s msp{};
-		msp.timestamp_sample = hrt_absolute_time();
 		msp.valid = true;
-		msp.data_source = manual_control_setpoint_s::SOURCE_MAVLINK_0;
-		msp.roll = 0.f;
-		msp.pitch = 0.f;
-		msp.yaw = 0.f;
-		msp.throttle = throttle;
-		msp.sticks_moving = false;
-		msp.timestamp = hrt_absolute_time();
+		msp.timestamp_sample = now;
+		msp.timestamp = now;
 
 		_manual_pub.publish(msp);
 		_published++;
+
+		if (ext_fresh) {
+			_published_ext++;
+		}
 	}
 }
 
 int DroidRc::print_status()
 {
-	PX4_INFO("published %u centered-stick setpoints", _published);
+	PX4_INFO("published %u setpoints (%u passed through from external joystick)",
+		 _published, _published_ext);
 	return 0;
 }
 

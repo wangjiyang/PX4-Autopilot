@@ -1,0 +1,7 @@
+menuconfig DRIVERS_DROID_BATTERY
+	bool "droid_battery"
+	default n
+	---help---
+		Battery bridge for Android: receives phone battery readings
+		from the Java BatteryManager layer over local UDP and
+		publishes battery_status
