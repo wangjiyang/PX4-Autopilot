@@ -235,7 +235,8 @@ int DroidRc::custom_command(int argc, char *argv[])
 			uORB::Subscription lpos_sub{ORB_ID(vehicle_local_position)};
 			vehicle_local_position_s lpos{};
 
-			if (!lpos_sub.copy(&lpos) || !lpos.xy_valid || !lpos.xy_global) {
+			if (!lpos_sub.copy(&lpos) || !lpos.xy_valid || !lpos.xy_global
+			    || !lpos.z_valid || !lpos.z_global) {
 				PX4_ERR("orbit needs a valid global local-position reference");
 				return 1;
 			}
