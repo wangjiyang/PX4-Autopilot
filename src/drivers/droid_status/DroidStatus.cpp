@@ -408,7 +408,9 @@ void DroidStatus::run()
 		// sensors can legitimately stop (screen off on stock ROMs), the
 		// simulator's cannot.
 		{
-			const bool grace_over = now - task_start > 20 * 1000000UL;
+			// 45 s grace: under boot-storm load a healthy pipeline can take
+			// >20 s to come up, and a premature restart just makes a storm
+			const bool grace_over = now - task_start > 45 * 1000000UL;
 			const bool att_dead = grace_over
 					      && (last_att_time == 0 || now - last_att_time > 3000000);
 			const bool gyro_alive = pkt.gyro_rate_hz > 100.f;
