@@ -34,19 +34,35 @@ DroidSensors::DroidSensors()
 hrt_abstime DroidSensors::map_timestamp(int slot, int64_t event_timestamp_ns)
 {
 	// ASensorEvent.timestamp is CLOCK_BOOTTIME in ns; hrt is CLOCK_MONOTONIC.
-	// Several samples arrive per looper wakeup - stamping them all with
-	// hrt_absolute_time() would collapse dt to ~0 and corrupt the gyro
-	// integration downstream. Instead keep the event spacing and only
-	// (re)estimate the clock offset when it drifts (e.g. after a suspend).
-	const uint64_t ev_us = (uint64_t)(event_timestamp_ns / 1000);
-	const uint64_t now = hrt_absolute_time();
-	const int64_t mapped_err = (int64_t)(ev_us + _ts_offset_us[slot]) - (int64_t)now;
+	// Both clocks tick at the same rate while the device is awake, so the
+	// offset is constant between suspends - track it as the MINIMUM observed
+	// latency (now - ev). Re-estimating it on every delivery-jitter spike
+	// (earlier approach) stretched/compressed dt between adjacent samples;
+	// the EKF integrated gyro over those wrong dts, saw phantom rotation and
+	// learned absurd gyro biases (0.17 rad/s observed on a static phone).
+	const int64_t ev_us = event_timestamp_ns / 1000;
+	const int64_t now = (int64_t)hrt_absolute_time();
+	const int64_t candidate = now - ev_us;
+	int64_t &off = _ts_offset_us[slot];
 
-	if (_ts_offset_us[slot] == 0 || mapped_err > 0 || mapped_err < -50000) {
-		_ts_offset_us[slot] = now - ev_us;
+	if (off == OFFSET_UNSET || candidate < off) {
+		// tighter mapping (lower delivery latency observed, or the clocks
+		// diverged across a suspend): adopt immediately, keeps mapped <= now
+		off = candidate;
+
+	} else {
+		// drift extremely slowly toward higher-latency observations so a
+		// one-off tight outlier cannot pin the offset forever
+		off += (candidate - off) >> 10;
 	}
 
-	const uint64_t mapped = ev_us + _ts_offset_us[slot];
+	const int64_t mapped_signed = ev_us + off;
+
+	if (mapped_signed <= 0) {
+		return 0;
+	}
+
+	const uint64_t mapped = (uint64_t)mapped_signed;
 
 	// Some HALs deliver out-of-order batches. Downstream (vehicle_imu)
 	// integrates delta_velocity/dt, so squeezing timestamps to stay

@@ -86,7 +86,9 @@ private:
 	 *  vehicle_imu rejects them. slot: 0 accel, 1 gyro, 2 mag, 3 baro. */
 	hrt_abstime map_timestamp(int slot, int64_t event_timestamp_ns);
 
-	uint64_t _ts_offset_us[4] {};
+	static constexpr int64_t OFFSET_UNSET = INT64_MAX;
+
+	int64_t _ts_offset_us[4] {OFFSET_UNSET, OFFSET_UNSET, OFFSET_UNSET, OFFSET_UNSET};
 	uint64_t _last_mapped_us[4] {};
 
 	PX4Accelerometer _px4_accel{DEVICE_ID_IMU};
