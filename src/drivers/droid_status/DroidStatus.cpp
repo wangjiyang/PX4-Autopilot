@@ -89,7 +89,7 @@ struct droid_status_pkt {
 	uint8_t  preflight_pass;  // 107 vehicle_status.pre_flight_checks_pass
 	uint8_t  nav_state;       // 108
 	uint8_t  arming_state;    // 109
-	uint16_t reserved;        // 110
+	uint16_t att_reset_count; // 110 vehicle_attitude.quat_reset_counter (EKF attitude jumps)
 	// --- version 2: control chain outputs (gimbal/motor demo) ---
 	float    torque_sp[3];    // 112 normalized torque setpoint (roll/pitch/yaw)
 	float    thrust_sp;       // 124 normalized collective thrust demand (0..1, up)
@@ -233,6 +233,8 @@ void DroidStatus::run()
 			accel_cnt = gyro_cnt = mag_cnt = gps_cnt = 0;
 			window_start = now;
 		}
+
+		pkt.att_reset_count = att.quat_reset_counter;
 
 		const matrix::Eulerf euler(matrix::Quatf(att.q));
 		pkt.roll = euler.phi();
